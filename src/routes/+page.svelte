@@ -41,10 +41,6 @@
 		const netImpulse = curve!.impulse + m * a * curve!.time;
 		const toIgnT = netImpulse / -(m * a);
 
-		setTimeout(() => {
-			underThrust = true;
-		}, toIgnT * 1000);
-
 		const interval = setInterval(() => {
 			cycle += 1;
 
@@ -53,6 +49,10 @@
 			t = tNow;
 
 			avgDt = avgDt * ((cycle - 1) / cycle) + dt / cycle;
+
+			if (!underThrust && tNow >= toIgnT) {
+				underThrust = true;
+			}
 
 			if (underThrust && !ignStartT) {
 				ignStartT = tNow;
@@ -63,10 +63,6 @@
 			if (n != nLog[nLog.length - 1]?.n) {
 				nLog = [...nLog, { n: n, t: tNow }];
 				window.scrollTo(0, document.body.scrollHeight);
-			}
-
-			if (v >= 0) {
-				underThrust = false;
 			}
 
 			if (n <= 0 && nLog.length > 1) {

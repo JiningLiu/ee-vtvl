@@ -67,8 +67,6 @@ export class Curve {
 		this.points = points;
 		this.impulse = impulse;
 		this.time = points[points.length - 1].t;
-
-		console.dir(this);
 	}
 
 	thrust(t: number): number {
