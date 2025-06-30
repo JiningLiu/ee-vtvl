@@ -1,4 +1,5 @@
-const e12 = `0.052,5.045
+const e12 = `0,0
+0.052,5.045
 0.096,9.91
 0.196,24.144
 0.251,31.351
@@ -37,15 +38,37 @@ interface Point {
 
 export class Curve {
 	points: Point[];
+	impulse: number;
+	time: number;
 
 	constructor(public csv: string) {
-		this.points = csv
+		const points = csv
 			.split('\n')
 			.map((line) => line.split(',').map(Number))
 			.map((pair) => ({
 				t: pair[0],
 				n: pair[1]
 			})) as Point[];
+
+		let impulse = 0;
+
+		for (const i in points) {
+			if (+i + 1 >= points.length) {
+				break;
+			}
+
+			const p0 = points[+i];
+			const p1 = points[+i + 1];
+
+			const area = 0.5 * (p0.n + p1.n) * (p1.t - p0.t);
+			impulse += area;
+		}
+
+		this.points = points;
+		this.impulse = impulse;
+		this.time = points[points.length - 1].t;
+
+		console.dir(this);
 	}
 
 	thrust(t: number): number {

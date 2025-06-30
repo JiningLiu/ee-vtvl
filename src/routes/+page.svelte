@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { Curve, e12Curve } from '$lib/curve';
 	import MeasureStick from '$lib/MeasureStick.svelte';
+	import { onMount } from 'svelte';
+
+	onMount(() => {
+		window.scrollTo(0, document.body.scrollHeight);
+	});
 
 	let curve: Curve | undefined;
 
@@ -8,13 +13,14 @@
 
 	let cycle = 0;
 	let initT = 0; // s
+	let ignStartT: number | undefined; // s
 	let t = 0; // s
 	let dt = 0; // s
 	let avgDt = 0; // s
 
-	const m = 0.7; // kg
+	const m = 0.8; // kg
 
-	let s = 10; // m
+	let s = 20; // m
 	let u = 0; // m/s
 	let v = 0; // m/sx
 	let a = -9.81; // ms^-2
@@ -32,6 +38,13 @@
 
 		initT = performance.now() / 1000;
 
+		const netImpulse = curve!.impulse + m * a * curve!.time;
+		const toIgnT = netImpulse / -(m * a);
+
+		setTimeout(() => {
+			underThrust = true;
+		}, toIgnT * 1000);
+
 		const interval = setInterval(() => {
 			cycle += 1;
 
@@ -41,11 +54,23 @@
 
 			avgDt = avgDt * ((cycle - 1) / cycle) + dt / cycle;
 
-			let n = underThrust ? (curve?.thrust(t) ?? 0) : 0;
+			if (underThrust && !ignStartT) {
+				ignStartT = tNow;
+			}
 
-			if (n != nLog[nLog.length - 1].n) {
+			let n = underThrust ? curve!.thrust(tNow - ignStartT!) : 0;
+
+			if (n != nLog[nLog.length - 1]?.n) {
 				nLog = [...nLog, { n: n, t: tNow }];
 				window.scrollTo(0, document.body.scrollHeight);
+			}
+
+			if (v >= 0) {
+				underThrust = false;
+			}
+
+			if (n <= 0 && nLog.length > 1) {
+				clearInterval(interval);
 			}
 
 			a = (m * -9.81 + n) / m;
@@ -61,10 +86,10 @@
 
 			ctx.clearRect(0, 0, c.width, c.height);
 
-			ctx.drawImage(rocket, 50, -s * 100 + 1000);
+			ctx.drawImage(rocket, 50, -s * 100 + 2000);
 
 			if (n > 0) {
-				ctx.drawImage(flame, 78, -s * 100 + 1000 + 131 - 11);
+				ctx.drawImage(flame, 78, -s * 100 + 2000 + 131 - 11);
 			}
 		}, 4);
 	}
@@ -79,8 +104,8 @@
 	</div>
 
 	<div class="hstack a-end">
-		<canvas id="canvas" width="162" height="1131"></canvas>
-		<MeasureStick length={1000} />
+		<canvas id="canvas" width="162" height="2131"></canvas>
+		<MeasureStick length={2000} />
 	</div>
 
 	<div class="info">
@@ -113,9 +138,11 @@
 	<div class="info">
 		{#each nLog as data}
 			<p>
-				{String(Math.round(data.t * 100) / 100).padStart(5, '0')} s - {String(
-					Math.round(data.n * 100) / 100
-				).padStart(5, '0')} N
+				{[String(Math.round(data.t * 1000) / 1000)]
+					.map((str) => (str.includes('.') ? str : str + '.'))[0]
+					.padEnd(5, '0')} s - {[String(Math.round(data.n * 100) / 100)]
+					.map((str) => (str.includes('.') ? str : str + '.'))[0]
+					.padEnd(5, '0')} N
 			</p>
 		{/each}
 	</div>
