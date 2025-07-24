@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Curve, e12Curve } from '$lib/curve';
+	import { Curve, e12Curve, f15Curve } from '$lib/curve';
 	import MeasureStick from '$lib/MeasureStick.svelte';
 	import { onMount } from 'svelte';
 
@@ -141,6 +141,11 @@
 					.padEnd(5, '0')} N
 			</p>
 		{/each}
+
+		<hr />
+
+		<p>J = {Math.round((curve?.impulse ?? 0) * 100) / 100} N</p>
+		<p>t = {Math.round((curve?.time ?? 0) * 100) / 100} s</p>
 	</div>
 
 	{#if curve == undefined}
@@ -148,6 +153,12 @@
 			on:click={() => {
 				curve = e12Curve;
 			}}>E12 Curve</button
+		>
+
+		<button
+			on:click={() => {
+				curve = f15Curve;
+			}}>F15 Curve</button
 		>
 
 		<input
@@ -160,6 +171,7 @@
 					reader.onload = (event) => {
 						const text = event.target?.result as string;
 						curve = new Curve(text);
+						console.dir(curve);
 					};
 					reader.readAsText(file);
 				}
