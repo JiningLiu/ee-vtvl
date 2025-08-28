@@ -1,13 +1,22 @@
 <script lang="ts">
-	import { Curve, e12Curve, f15Curve } from '$lib/curve';
+	import { Curve, displacementWithLinearThrust, e12Curve, f15Curve } from '$lib/curve';
 	import MeasureStick from '$lib/MeasureStick.svelte';
 	import { onMount } from 'svelte';
 
+	let scale: number;
+
+	const testCurve = f15Curve;
+
 	onMount(() => {
+		scale = window.innerHeight / 2153;
 		window.scrollTo(0, document.body.scrollHeight);
+
+		const result = displacementWithLinearThrust(testCurve, 0.8, 9.81, 0.0, 0.35, 3.8);
+		console.log(result);
 	});
 
-	let curve: Curve | undefined;
+	let curve: Curve | undefined = testCurve;
+	console.log(curve)
 
 	let started = false;
 
@@ -21,8 +30,8 @@
 	const m = 0.8; // kg
 
 	let s = 20; // m
-	let u = 0; // m/s
-	let v = 0; // m/sx
+	let u = 0; // ms^-1
+	let v = 0; // ms^-1
 	let a = -9.81; // ms^-2
 
 	let nLog: { n: number; t: number }[] = [{ n: 0, t: 0 }]; // { n: N, t: s }
@@ -38,60 +47,91 @@
 
 		initT = performance.now() / 1000;
 
-		const netImpulse = curve!.impulse + m * a * curve!.time;
-		const toIgnT = netImpulse / -(m * a);
+		const pwmStartT = 0.35;
+		const f = 5;
+		const pt = 0.2;
 
-		const interval = setInterval(() => {
+		let lowestSpeed = Infinity;
+
+		const fixedDt = 0.001;
+		let accumulator = 0;
+		let lastRealT = performance.now() / 1000;
+
+		function physicsStep() {
 			cycle += 1;
+			t += fixedDt;
 
-			const tNow = performance.now() / 1000 - initT;
-			dt = tNow - t;
-			t = tNow;
+			if (t >= pwmStartT) {
+				if ((t - pwmStartT) % (1 / f) >= 1 / f - pt) {
+					underThrust = true;
+				} else {
+					underThrust = false;
+				}
+			}
 
-			avgDt = avgDt * ((cycle - 1) / cycle) + dt / cycle;
-
-			if (!underThrust && tNow >= toIgnT) {
-				underThrust = true;
+			if (t >= Math.floor(curve!.time * f) / f + pwmStartT) {
+				underThrust = false;
 			}
 
 			if (underThrust && !ignStartT) {
-				ignStartT = tNow;
+				ignStartT = t;
 			}
 
-			let n = underThrust ? curve!.thrust(tNow - ignStartT!) : 0;
+			let n = underThrust ? curve!.thrust(t - ignStartT!) : 0;
 
 			if (n != nLog[nLog.length - 1]?.n) {
-				nLog = [...nLog, { n: n, t: tNow }];
+				nLog = [...nLog, { n: n, t: t }];
 				window.scrollTo(0, document.body.scrollHeight);
-			}
-
-			if (n <= 0 && nLog.length > 1) {
-				clearInterval(interval);
 			}
 
 			a = (m * -9.81 + n) / m;
 
-			v = u + a * dt;
-			s += u * dt + 0.5 * a * dt * dt;
+			// semi-implicit Euler
+			v += a * fixedDt;
+			s += v * fixedDt;
 
-			u = v;
+			const speed = Math.abs(v);
 
-			if (s < 0) {
-				clearInterval(interval);
+			if (speed < lowestSpeed && t > 1) {
+				lowestSpeed = speed;
+				console.log(lowestSpeed);
 			}
 
+			if (s < 0 || t >= 3.8) {
+				started = false; // stop physics loop
+			}
+		}
+
+		function render() {
 			ctx.clearRect(0, 0, c.width, c.height);
-
 			ctx.drawImage(rocket, 50, -s * 100 + 2000);
-
+			let n = nLog[nLog.length - 1]?.n ?? 0;
 			if (n > 0) {
 				ctx.drawImage(flame, 78, -s * 100 + 2000 + 131 - 11);
 			}
-		}, 4);
+		}
+
+		function loop() {
+			let now = performance.now() / 1000;
+			let frameDt = now - lastRealT;
+			lastRealT = now;
+			accumulator += frameDt;
+
+			while (accumulator >= fixedDt && started) {
+				physicsStep();
+				accumulator -= fixedDt;
+			}
+
+			render();
+
+			if (started) requestAnimationFrame(loop);
+		}
+
+		requestAnimationFrame(loop);
 	}
 </script>
 
-<main>
+<main style="transform: scale({scale});">
 	<img src="flame.svg" alt="flame" id="flame" style="display: none;" />
 
 	<div class="hstack">
@@ -118,7 +158,7 @@
 				.padStart(5, '+')} m
 		</p>
 		<p>
-			v = {(v > 0 ? '+' : '-' + String(Math.round(Math.abs(v) * 100) / 100)).padEnd(5, '0')} ms^-1
+			v = {(v >= 0 ? '+' : '-') + String(Math.round(Math.abs(v) * 100) / 100).padEnd(5, '0')} ms^-1
 		</p>
 		<p>
 			a = {String(Math.round(a * 100) / 100)
@@ -206,6 +246,7 @@
 
 		min-height: 100vh;
 		padding: 10px;
+		transform-origin: bottom left;
 	}
 
 	canvas {

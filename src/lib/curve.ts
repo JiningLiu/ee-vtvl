@@ -128,3 +128,108 @@ export class Curve {
 export const e12Curve = new Curve(e12);
 
 export const f15Curve = new Curve(f15);
+
+class MotionResult {
+	y: number; // displacement (downward positive)
+	v: number; // velocity at end (downward positive)
+	impulse: number; // total impulse applied (N·s)
+
+	constructor(y: number, v: number, impulse: number) {
+		this.y = y;
+		this.v = v;
+		this.impulse = impulse;
+	}
+}
+
+export function displacementWithLinearThrust(
+	c: Curve,
+	m: number = 0.8,
+	g: number = 9.81,
+	freeFallStart: number = 0.0,
+	freeFallEnd: number = 2.0,
+	thrustEnd: number = 5.0
+): MotionResult {
+	if (thrustEnd < freeFallEnd) {
+		throw new Error('thrustEnd must be >= freeFallEnd');
+	}
+
+	const curve = JSON.parse(JSON.stringify(c)) as Curve;
+
+	curve.points = curve.points.map((s) => {
+		return {
+			t: s.t + freeFallEnd,
+			n: s.n
+		};
+	});
+
+	// Helper: linear interpolation of thrust at a given time
+	const sampleAt = (t: number, arr: Point[]): Point => {
+		const exact = arr.find((s) => Math.abs(s.t - t) < 1e-12);
+		if (exact) return { t, n: exact.n };
+
+		const j = arr.findIndex((s) => s.t > t);
+		if (j <= 0) {
+			// If outside range, assume T=0 beyond provided curve
+			return { t, n: 0.0 };
+		}
+		const a = arr[j - 1];
+		const b = arr[j];
+		const u = (t - a.t) / (b.t - a.t);
+		return { t, n: a.n + u * (b.n - a.n) };
+	};
+
+	// Sort by time
+	const S = [...curve.points].sort((a, b) => a.t - b.t);
+	const t0 = freeFallStart;
+	const t1 = freeFallEnd;
+	const t2 = thrustEnd;
+
+	// State after free fall
+	const v_ff = 0.0 + g * (t1 - t0);
+	const y_ff = 0.0 + 0.5 * g * Math.pow(t1 - t0, 2);
+
+	// Build full knot list for [t1, t2]
+	let knots: Point[] = [];
+	if (S.length > 0) {
+		knots.push(sampleAt(t1, S));
+		for (const s of S) {
+			if (s.t > t1 && s.t < t2) knots.push(s);
+		}
+		knots.push(sampleAt(t2, S));
+	} else {
+		// No thrust data: treat as zero-thrust
+		knots = [
+			{ t: t1, n: 0.0 },
+			{ t: t2, n: 0.0 }
+		];
+	}
+
+	// Integrate exactly over each linear segment
+	let y = y_ff;
+	let v = v_ff;
+	let J = 0.0;
+
+	for (let i = 0; i < knots.length - 1; i++) {
+		const a = knots[i];
+		const b = knots[i + 1];
+		const dt = b.t - a.t;
+		const s = (b.n - a.n) / dt; // thrust slope
+
+		// save velocity at start of segment
+		const v_i = v;
+
+		// impulse on this segment (trapezoid)
+		J += 0.5 * (a.n + b.n) * dt;
+
+		// velocity update
+		const dv = g * dt - (a.n / m) * dt - (s / (2.0 * m)) * dt * dt;
+		v += dv;
+
+		// displacement update
+		const dy =
+			v_i * dt + 0.5 * g * dt * dt - (a.n / (2.0 * m)) * dt * dt - (s / (6.0 * m)) * dt * dt * dt;
+		y += dy;
+	}
+
+	return new MotionResult(y, v, J);
+}
