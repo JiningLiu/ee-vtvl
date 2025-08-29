@@ -2,5 +2,3 @@
 <h1 align=center>(VT)VL Simulator</h1>
 
 A basic vertical landing (VL) simulator for solid-fuel rocket motors under a fixed thrust curve, using binary-state PWM controls.
-
-© 2025 Jining Liu
