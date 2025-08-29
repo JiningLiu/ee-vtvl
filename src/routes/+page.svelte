@@ -1,36 +1,40 @@
 <script lang="ts">
-	import { Curve, displacementWithLinearThrust, e12Curve, f15Curve } from '$lib/curve';
+	import {
+		Curve,
+		d12Curve,
+		displacementWithLinearThrust,
+		e12Curve,
+		e16Curve,
+		f15Curve,
+		MotionResult
+	} from '$lib/curve';
 	import MeasureStick from '$lib/MeasureStick.svelte';
 	import { onMount } from 'svelte';
 
 	let scale: number;
 
-	const testCurve = f15Curve;
+	let m: number; // kg
+	let pwmStartT = 0;
 
 	onMount(() => {
 		scale = window.innerHeight / 2153;
 		window.scrollTo(0, document.body.scrollHeight);
-
-		const result = displacementWithLinearThrust(testCurve, 0.8, 9.81, 0.0, 0.35, 3.8);
-		console.log(result);
+		m = Number(prompt('Mass (kg)', '0.8'));
 	});
 
-	let curve: Curve | undefined = testCurve;
-	console.log(curve)
+	let curve: Curve | undefined;
+	let targetCurve: Curve | undefined;
+	let f: number | undefined;
+	let targetPt: number | undefined;
+	let targetMotionResult: MotionResult | undefined;
 
 	let started = false;
 
 	let cycle = 0;
-	let initT = 0; // s
 	let ignStartT: number | undefined; // s
 	let t = 0; // s
-	let dt = 0; // s
-	let avgDt = 0; // s
-
-	const m = 0.8; // kg
 
 	let s = 20; // m
-	let u = 0; // ms^-1
 	let v = 0; // ms^-1
 	let a = -9.81; // ms^-2
 
@@ -45,14 +49,6 @@
 		let rocket = document.getElementById('rocket') as HTMLImageElement;
 		let flame = document.getElementById('flame') as HTMLImageElement;
 
-		initT = performance.now() / 1000;
-
-		const pwmStartT = 0.35;
-		const f = 5;
-		const pt = 0.2;
-
-		let lowestSpeed = Infinity;
-
 		const fixedDt = 0.001;
 		let accumulator = 0;
 		let lastRealT = performance.now() / 1000;
@@ -62,14 +58,10 @@
 			t += fixedDt;
 
 			if (t >= pwmStartT) {
-				if ((t - pwmStartT) % (1 / f) >= 1 / f - pt) {
-					underThrust = true;
-				} else {
-					underThrust = false;
-				}
+				underThrust = true;
 			}
 
-			if (t >= Math.floor(curve!.time * f) / f + pwmStartT) {
+			if (t >= targetCurve!.time + pwmStartT) {
 				underThrust = false;
 			}
 
@@ -77,7 +69,7 @@
 				ignStartT = t;
 			}
 
-			let n = underThrust ? curve!.thrust(t - ignStartT!) : 0;
+			let n = underThrust ? targetCurve!.thrust(t - ignStartT!) : 0;
 
 			if (n != nLog[nLog.length - 1]?.n) {
 				nLog = [...nLog, { n: n, t: t }];
@@ -86,19 +78,11 @@
 
 			a = (m * -9.81 + n) / m;
 
-			// semi-implicit Euler
 			v += a * fixedDt;
 			s += v * fixedDt;
 
-			const speed = Math.abs(v);
-
-			if (speed < lowestSpeed && t > 1) {
-				lowestSpeed = speed;
-				console.log(lowestSpeed);
-			}
-
-			if (s < 0 || t >= 3.8) {
-				started = false; // stop physics loop
+			if (s <= 0) {
+				started = false;
 			}
 		}
 
@@ -129,6 +113,48 @@
 
 		requestAnimationFrame(loop);
 	}
+
+	$: if (curve && !targetCurve) {
+		f = Number(prompt('PWM Frequency', '5'));
+		const step = Number(prompt('Step', '0.005'));
+
+		const p = 1 / f!;
+
+		for (let t = 0; t <= Math.sqrt((2 * s) / -a); t += step) {
+			for (let pt = 0; pt <= p; pt += step) {
+				const thisCurve = curve!.pwm(f!, pt);
+				const result = displacementWithLinearThrust(thisCurve, m, -a, 0.0, t, t + thisCurve.time);
+
+				if (!result.v || !result.y) {
+					console.log(thisCurve);
+				}
+
+				// if (
+				// 	Math.abs(result.y - 20) + Math.abs(result.v) <
+				// 	Math.abs((targetMotionResult?.y ?? Infinity) - 20) +
+				// 		Math.abs(targetMotionResult?.v ?? Infinity)
+				// )
+
+				if (
+					Math.abs(result.y - 20) < 0.1 &&
+					Math.abs(result.v) < Math.abs(targetMotionResult?.v ?? Infinity) &&
+					Math.abs(result.v) < 2
+				) {
+					pwmStartT = t;
+					targetCurve = thisCurve;
+					targetPt = pt;
+					targetMotionResult = result;
+				}
+			}
+		}
+
+		if (!targetMotionResult) {
+			alert('No viable landing configurations found. Reloading.');
+			location.reload();
+		}
+
+		console.log(pwmStartT, targetPt, targetMotionResult);
+	}
 </script>
 
 <main style="transform: scale({scale});">
@@ -147,18 +173,14 @@
 	<div class="info">
 		<p>cycle = {String(cycle).padStart(3, '0')}</p>
 		<p>t = {String(Math.round(t * 1000) / 1000).padEnd(5, '0')} s</p>
-		<p>f = {Math.round(1 / dt)} Hz</p>
-		<p>f&#x0305; = {Math.round(1 / avgDt)} Hz</p>
 
 		<hr />
 
 		<p>
-			s = {String(Math.round(s * 100) / 100)
-				.padEnd(4, '0')
-				.padStart(5, '+')} m
+			s = {String(Math.round(s * 100) / 100)} m
 		</p>
 		<p>
-			v = {(v >= 0 ? '+' : '-') + String(Math.round(Math.abs(v) * 100) / 100).padEnd(5, '0')} ms^-1
+			v = {(v >= 0 ? '+' : '-') + String(Math.round(Math.abs(v) * 100) / 100)} ms^-1
 		</p>
 		<p>
 			a = {String(Math.round(a * 100) / 100)
@@ -186,13 +208,40 @@
 
 		<p>J = {Math.round((curve?.impulse ?? 0) * 100) / 100} N</p>
 		<p>t = {Math.round((curve?.time ?? 0) * 100) / 100} s</p>
+
+		<p>J_pwm = {Math.round((targetCurve?.impulse ?? 0) * 100) / 100} N</p>
+		<p>t_pwm = {Math.round((targetCurve?.time ?? 0) * 100) / 100} s</p>
+
+		<hr />
+
+		<p>f = {String(Math.round((f ?? 0) * 100) / 100)} Hz</p>
+		<p>pt = {String(Math.round((targetPt ?? 0) * 100) / 100)} s</p>
+
+		<p>t_i = {String(Math.round(pwmStartT * 1000) / 1000)} s</p>
+
+		<p>
+			s_fe = {String(Math.round((20 - (targetMotionResult?.y ?? 0)) * 1000) / 1000)} m
+		</p>
+		<p>v_fe = {String(Math.round(-(targetMotionResult?.v ?? 0) * 1000) / 1000)} ms^-1</p>
 	</div>
 
 	{#if curve == undefined}
 		<button
 			on:click={() => {
+				curve = d12Curve;
+			}}>D12 Curve</button
+		>
+
+		<button
+			on:click={() => {
 				curve = e12Curve;
 			}}>E12 Curve</button
+		>
+
+		<button
+			on:click={() => {
+				curve = e16Curve;
+			}}>E16 Curve</button
 		>
 
 		<button

@@ -1,3 +1,25 @@
+const d12 = `0,0
+0.049,2.569
+0.116,9.369
+0.184,17.275
+0.237,24.258
+0.282,29.73
+0.297,27.01
+0.311,22.589
+0.322,17.99
+0.348,14.126
+0.386,12.099
+0.442,10.808
+0.546,9.876
+0.718,9.306
+0.879,9.105
+1.066,8.901
+1.257,8.698
+1.436,8.31
+1.59,8.294
+1.612,4.613
+1.65,0`;
+
 const e12 = `0,0
 0.052,5.045
 0.096,9.91
@@ -30,6 +52,37 @@ const e12 = `0,0
 2.375,9.37
 2.4,5.95
 2.44,0`;
+
+const e16 = `0,0
+0.15,1.371
+0.186,1.92
+0.206,3.387
+0.242,5.587
+0.252,7.422
+0.277,8.705
+0.333,13.474
+0.359,15.858
+0.374,16.592
+0.394,18.609
+0.435,21.544
+0.476,24.661
+0.521,26.44
+0.643,21.72
+0.725,20.432
+0.821,19.511
+0.898,18.958
+1.025,18.219
+1.142,18.032
+1.259,17.844
+1.396,17.472
+1.569,17.282
+1.757,17.275
+1.895,17.086
+2.027,17.816
+2.042,12.494
+2.052,8.457
+2.063,4.97
+2.09,0`;
 
 const f15 = `0,0
 0.148,7.638
@@ -69,14 +122,20 @@ export class Curve {
 	impulse: number;
 	time: number;
 
-	constructor(public csv: string) {
-		const points = csv
-			.split('\n')
-			.map((line) => line.split(',').map(Number))
-			.map((pair) => ({
-				t: pair[0],
-				n: pair[1]
-			})) as Point[];
+	constructor(data: string | Point[]) {
+		let points: Point[];
+
+		if (typeof data === 'string') {
+			points = data
+				.split('\n')
+				.map((line) => line.split(',').map(Number))
+				.map((pair) => ({
+					t: pair[0],
+					n: pair[1]
+				})) as Point[];
+		} else {
+			points = data;
+		}
 
 		let impulse = 0;
 
@@ -123,16 +182,55 @@ export class Curve {
 
 		return pLow.n + slope * (t - pLow.t);
 	}
+
+	pwm(f: number, pt: number) {
+		const period = 1 / f;
+		const pto = period - pt;
+
+		let newPoints: Point[] = [];
+		for (let i = 0; i < Math.floor(this.time / period); i++) {
+			const t = i * period;
+			if (t - 0.0000000000001 >= 0) {
+				newPoints.push({ t: t - 0.0000000000001, n: this.thrust(t - 0.0000000000001) });
+			}
+			newPoints.push({ t, n: 0 });
+			newPoints.push({ t: t + pto, n: 0 });
+			newPoints.push({
+				t: t + pto + 0.0000000000001,
+				n: this.thrust(t + pto + 0.0000000000001)
+			});
+			this.points
+				.filter((p) => p.t > t + pto + 0.0000000000001 && p.t < t + period)
+				.forEach((p) => {
+					newPoints.push(p);
+				});
+		}
+
+		this.points
+			.filter((p) => p.t > Math.floor(this.time / period) * period)
+			.forEach((p) => {
+				newPoints.push(p);
+			});
+
+		const uniquePoints = new Map<number, Point>();
+		for (const p of newPoints) {
+			uniquePoints.set(p.t, p);
+		}
+		newPoints = Array.from(uniquePoints.values()).toSorted((a, b) => a.t - b.t);
+
+		return new Curve(newPoints);
+	}
 }
 
+export const d12Curve = new Curve(d12);
 export const e12Curve = new Curve(e12);
-
+export const e16Curve = new Curve(e16);
 export const f15Curve = new Curve(f15);
 
-class MotionResult {
-	y: number; // displacement (downward positive)
-	v: number; // velocity at end (downward positive)
-	impulse: number; // total impulse applied (N·s)
+export class MotionResult {
+	y: number;
+	v: number;
+	impulse: number;
 
 	constructor(y: number, v: number, impulse: number) {
 		this.y = y;
@@ -143,16 +241,12 @@ class MotionResult {
 
 export function displacementWithLinearThrust(
 	c: Curve,
-	m: number = 0.8,
+	m: number,
 	g: number = 9.81,
 	freeFallStart: number = 0.0,
-	freeFallEnd: number = 2.0,
-	thrustEnd: number = 5.0
+	freeFallEnd: number,
+	thrustEnd: number
 ): MotionResult {
-	if (thrustEnd < freeFallEnd) {
-		throw new Error('thrustEnd must be >= freeFallEnd');
-	}
-
 	const curve = JSON.parse(JSON.stringify(c)) as Curve;
 
 	curve.points = curve.points.map((s) => {
@@ -162,14 +256,12 @@ export function displacementWithLinearThrust(
 		};
 	});
 
-	// Helper: linear interpolation of thrust at a given time
 	const sampleAt = (t: number, arr: Point[]): Point => {
 		const exact = arr.find((s) => Math.abs(s.t - t) < 1e-12);
 		if (exact) return { t, n: exact.n };
 
 		const j = arr.findIndex((s) => s.t > t);
 		if (j <= 0) {
-			// If outside range, assume T=0 beyond provided curve
 			return { t, n: 0.0 };
 		}
 		const a = arr[j - 1];
@@ -178,17 +270,14 @@ export function displacementWithLinearThrust(
 		return { t, n: a.n + u * (b.n - a.n) };
 	};
 
-	// Sort by time
 	const S = [...curve.points].sort((a, b) => a.t - b.t);
 	const t0 = freeFallStart;
 	const t1 = freeFallEnd;
 	const t2 = thrustEnd;
 
-	// State after free fall
 	const v_ff = 0.0 + g * (t1 - t0);
 	const y_ff = 0.0 + 0.5 * g * Math.pow(t1 - t0, 2);
 
-	// Build full knot list for [t1, t2]
 	let knots: Point[] = [];
 	if (S.length > 0) {
 		knots.push(sampleAt(t1, S));
@@ -197,14 +286,12 @@ export function displacementWithLinearThrust(
 		}
 		knots.push(sampleAt(t2, S));
 	} else {
-		// No thrust data: treat as zero-thrust
 		knots = [
 			{ t: t1, n: 0.0 },
 			{ t: t2, n: 0.0 }
 		];
 	}
 
-	// Integrate exactly over each linear segment
 	let y = y_ff;
 	let v = v_ff;
 	let J = 0.0;
@@ -213,19 +300,16 @@ export function displacementWithLinearThrust(
 		const a = knots[i];
 		const b = knots[i + 1];
 		const dt = b.t - a.t;
-		const s = (b.n - a.n) / dt; // thrust slope
+		if (Math.abs(dt) < 1e-12) continue;
+		const s = (b.n - a.n) / dt;
 
-		// save velocity at start of segment
 		const v_i = v;
 
-		// impulse on this segment (trapezoid)
 		J += 0.5 * (a.n + b.n) * dt;
 
-		// velocity update
 		const dv = g * dt - (a.n / m) * dt - (s / (2.0 * m)) * dt * dt;
 		v += dv;
 
-		// displacement update
 		const dy =
 			v_i * dt + 0.5 * g * dt * dt - (a.n / (2.0 * m)) * dt * dt - (s / (6.0 * m)) * dt * dt * dt;
 		y += dy;
